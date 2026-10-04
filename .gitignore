@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Runtime
+logs/*.log
+*.sqlite3
+
+# Data
+*.csv
+*.parquet
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
