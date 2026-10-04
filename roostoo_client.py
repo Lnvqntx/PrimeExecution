@@ -14,14 +14,29 @@ class RoostooClient:
         self.secret_key = secret_key
         self.session = requests.Session()
 
+    def _timestamp(self) -> str:
+        return str(int(time.time() * 1000))
+
     def server_time(self):
         response = self.session.get(f"{self.BASE_URL}/v3/serverTime", timeout=10)
         response.raise_for_status()
         return response.json()
 
+    def exchange_info(self):
+        response = self.session.get(f"{self.BASE_URL}/v3/exchangeInfo", timeout=10)
+        response.raise_for_status()
+        return response.json()
+
     def ticker(self, pair: str | None = None):
-        params = {} if pair is None else {"pair": pair}
-        response = self.session.get(f"{self.BASE_URL}/v3/ticker", params=params, timeout=10)
+        params = {"timestamp": self._timestamp()}
+        if pair is not None:
+            params["pair"] = pair
+
+        response = self.session.get(
+            f"{self.BASE_URL}/v3/ticker",
+            params=params,
+            timeout=10,
+        )
         response.raise_for_status()
         return response.json()
 
@@ -32,18 +47,24 @@ class RoostooClient:
             payload.encode(),
             hashlib.sha256,
         ).hexdigest()
+
         return {
             "RST-API-KEY": self.api_key,
             "MSG-SIGNATURE": signature,
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
-    def signed_get(self, path: str, params: dict):
-        params = dict(params)
-        params["timestamp"] = int(time.time() * 1000)
+    def signed_get(self, path: str, params: dict | None = None):
+        params = dict(params or {})
+        params["timestamp"] = self._timestamp()
+
         headers = self._signed_headers(params)
+
         response = self.session.get(
-            f"{self.BASE_URL}{path}", params=params, headers=headers, timeout=10
+            f"{self.BASE_URL}{path}",
+            params=params,
+            headers=headers,
+            timeout=10,
         )
         response.raise_for_status()
         return response.json()
