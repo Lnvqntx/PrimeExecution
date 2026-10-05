@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from features import build_features, load_snapshots
+from strategy_v2 import score_v2
 
 
 @dataclass
@@ -21,17 +22,23 @@ class PaperConfig:
     initial_cash: float = 100_000.0
 
 
-def make_targets(cross: pd.DataFrame, cfg: PaperConfig) -> dict[str, float]:
-    eligible = cross[
-        (cross["risk_adjusted_momentum"] > cfg.min_score)
-        & (cross["spread_bps"] <= 50.0)
-    ].copy()
+def make_targets(cross: pd.DataFrame, cfg: PaperConfig, strategy: str) -> dict[str, float]:
+    if strategy == "v2":
+        ranked = score_v2(cross)
+        score_col = "v2_score"
+        eligible = ranked[ranked[score_col] > cfg.min_score]
+    else:
+        eligible = cross[
+            (cross["risk_adjusted_momentum"] > cfg.min_score)
+            & (cross["spread_bps"] <= 50.0)
+        ].sort_values("risk_adjusted_momentum", ascending=False)
+        score_col = "risk_adjusted_momentum"
 
     if eligible.empty:
         return {}
 
-    selected = eligible.head(cfg.top_n).copy()
-    scores = selected["risk_adjusted_momentum"].clip(lower=0.0)
+    selected = eligible.head(cfg.top_n)
+    scores = selected[score_col].clip(lower=0.0)
 
     if scores.sum() <= 0:
         return {}
@@ -44,47 +51,35 @@ def make_targets(cross: pd.DataFrame, cfg: PaperConfig) -> dict[str, float]:
 
 def performance_metrics(equity: pd.Series) -> dict[str, float]:
     if len(equity) < 2:
-        return {
-            "total_return": 0.0,
-            "max_drawdown": 0.0,
-            "sharpe": 0.0,
-            "sortino": 0.0,
-        }
+        return {"total_return": 0.0, "max_drawdown": 0.0, "sharpe": 0.0, "sortino": 0.0}
 
     returns = equity.pct_change().dropna()
     total_return = equity.iloc[-1] / equity.iloc[0] - 1.0
-
-    running_max = equity.cummax()
-    drawdown = equity / running_max - 1.0
-    max_drawdown = float(drawdown.min())
+    drawdown = equity / equity.cummax() - 1.0
 
     mean = returns.mean()
     std = returns.std(ddof=1)
     downside = returns[returns < 0].std(ddof=1)
 
     sharpe = float(mean / std * math.sqrt(len(returns))) if std > 0 else 0.0
-    sortino = (
-        float(mean / downside * math.sqrt(len(returns)))
-        if downside > 0
-        else 0.0
-    )
+    sortino = float(mean / downside * math.sqrt(len(returns))) if downside > 0 else 0.0
 
     return {
         "total_return": float(total_return),
-        "max_drawdown": max_drawdown,
+        "max_drawdown": float(drawdown.min()),
         "sharpe": sharpe,
         "sortino": sortino,
     }
 
 
-def run_paper_backtest(df: pd.DataFrame, cfg: PaperConfig):
+def run_paper_backtest(
+    df: pd.DataFrame, cfg: PaperConfig, strategy: str = "v1"
+):
     features = build_features(df)
     timestamps = sorted(features["timestamp"].dropna().unique())
 
     if len(timestamps) < 61:
-        return None, {
-            "error": f"Need at least 61 snapshots; found {len(timestamps)}"
-        }
+        return None, {"error": f"Need at least 61 snapshots; found {len(timestamps)}"}
 
     positions: dict[str, float] = {}
     equity = cfg.initial_cash
@@ -99,93 +94,72 @@ def run_paper_backtest(df: pd.DataFrame, cfg: PaperConfig):
         current_prices = dict(zip(current["pair"], current["last_price"]))
         next_prices = dict(zip(nxt["pair"], nxt["last_price"]))
 
-        # Rebalance at the current snapshot, then hold until the next one.
         if i % cfg.rebalance_every == 0:
             latest = current.replace([float("inf"), float("-inf")], pd.NA).dropna(
-                subset=[
-                    "last_price",
-                    "risk_adjusted_momentum",
-                    "vol_60",
-                    "spread_bps",
-                ]
-            )
-            latest = latest.sort_values(
-                "risk_adjusted_momentum", ascending=False
+                subset=["last_price", "risk_adjusted_momentum", "vol_60", "spread_bps"]
             )
 
-            targets = make_targets(latest, cfg)
-
-            all_pairs = set(positions) | set(targets)
+            targets = make_targets(latest, cfg, strategy)
             turnover = 0.0
 
-            for pair in all_pairs:
+            for pair in set(positions) | set(targets):
                 old = positions.get(pair, 0.0)
                 new = targets.get(pair, 0.0)
                 change = abs(new - old)
                 turnover += change
 
                 if change > 1e-12:
-                    trade_rows.append(
-                        {
-                            "timestamp": timestamp,
-                            "pair": pair,
-                            "old_weight": old,
-                            "new_weight": new,
-                            "turnover": change,
-                        }
-                    )
+                    trade_rows.append({
+                        "timestamp": timestamp,
+                        "pair": pair,
+                        "old_weight": old,
+                        "new_weight": new,
+                        "turnover": change,
+                    })
 
             cost = turnover * (cfg.fee_bps + cfg.slippage_bps) / 10_000.0
             equity *= 1.0 - cost
             positions = targets
 
-        # Apply next-period asset returns to the current portfolio weights.
         portfolio_return = 0.0
         for pair, weight in positions.items():
             if pair in current_prices and pair in next_prices:
                 price = current_prices[pair]
                 if price and price > 0:
-                    asset_return = next_prices[pair] / price - 1.0
-                    portfolio_return += weight * asset_return
+                    portfolio_return += weight * (next_prices[pair] / price - 1.0)
 
         equity *= 1.0 + portfolio_return
-
-        equity_rows.append(
-            {
-                "timestamp": next_time,
-                "equity": equity,
-                "positions": len(positions),
-            }
-        )
+        equity_rows.append({
+            "timestamp": next_time,
+            "equity": equity,
+            "positions": len(positions),
+        })
 
     equity_df = pd.DataFrame(equity_rows)
     metrics = performance_metrics(equity_df["equity"])
     metrics["observations"] = len(timestamps)
     metrics["trades"] = len(trade_rows)
 
-    return equity_df, {
-        **metrics,
-        "trade_log": pd.DataFrame(trade_rows),
-    }
+    return equity_df, {**metrics, "trade_log": pd.DataFrame(trade_rows)}
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="data/ticker_snapshots.csv")
     parser.add_argument("--top", type=int, default=5)
+    parser.add_argument("--strategy", choices=["v1", "v2"], default="v1")
     args = parser.parse_args()
 
     df = load_snapshots(args.data)
-
     if df.empty:
         print("No market data yet.")
         return
 
     cfg = PaperConfig(top_n=args.top)
-    equity, result = run_paper_backtest(df, cfg)
+    equity, result = run_paper_backtest(df, cfg, args.strategy)
 
     print("=" * 78)
-    print("PRIME EXECUTION — PAPER TRADING ENGINE")
+    print(f"PRIME EXECUTION — {args.strategy.upper()} PAPER TRADING ENGINE")
     print("=" * 78)
 
     if equity is None:
