@@ -75,10 +75,11 @@ def performance_metrics(equity: pd.Series, timestamps=None) -> dict[str, float]:
 
     calmar = 0.0
     if timestamps is not None and len(timestamps) >= 2 and max_drawdown < 0:
-        seconds = max(
-            1.0,
-            (pd.Timestamp(timestamps[-1]) - pd.Timestamp(timestamps[0])).total_seconds(),
-        )
+        # Series uses a RangeIndex here, so iloc is required for positional
+        # first/last access on pandas 2.x.
+        first_time = pd.Timestamp(timestamps.iloc[0])
+        last_time = pd.Timestamp(timestamps.iloc[-1])
+        seconds = max(1.0, (last_time - first_time).total_seconds())
         years = seconds / (365.0 * 24.0 * 3600.0)
         annualized_return = (1.0 + total_return) ** (1.0 / max(years, 1e-9)) - 1.0
         calmar = float(annualized_return / abs(max_drawdown))
