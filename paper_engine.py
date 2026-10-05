@@ -4,7 +4,6 @@ import argparse
 import math
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 
 from features import build_features, load_snapshots
@@ -39,12 +38,6 @@ def make_targets(cross: pd.DataFrame, cfg: PaperConfig) -> dict[str, float]:
 
     weights = scores / scores.sum() * cfg.gross_exposure
     weights = weights.clip(upper=cfg.max_position_weight)
-
-    # Re-normalize after the per-position cap.
-    if weights.sum() > 0:
-        weights = weights / weights.sum() * min(
-            cfg.gross_exposure, weights.sum()
-        )
 
     return dict(zip(selected["pair"], weights))
 
@@ -93,40 +86,22 @@ def run_paper_backtest(df: pd.DataFrame, cfg: PaperConfig):
             "error": f"Need at least 61 snapshots; found {len(timestamps)}"
         }
 
-    cash = cfg.initial_cash
     positions: dict[str, float] = {}
+    equity = cfg.initial_cash
     equity_rows = []
     trade_rows = []
-
-    last_targets: dict[str, float] = {}
 
     for i, timestamp in enumerate(timestamps[:-1]):
         current = features[features["timestamp"] == timestamp].copy()
         next_time = timestamps[i + 1]
         nxt = features[features["timestamp"] == next_time].copy()
 
-        prices = dict(zip(current["pair"], current["last_price"]))
+        current_prices = dict(zip(current["pair"], current["last_price"]))
         next_prices = dict(zip(nxt["pair"], nxt["last_price"]))
 
-        # Mark current portfolio before any rebalance.
-        current_equity = cash
-        for pair, weight in positions.items():
-            if pair in prices:
-                current_equity += weight * current_equity * 0.0
-        # Positions are represented as portfolio weights. Reconstruct their
-        # value from the previous equity using current prices below.
-        if i == 0:
-            portfolio_value = cash
-        else:
-            portfolio_value = equity_rows[-1]["equity"]
-            for pair, old_weight in positions.items():
-                if pair in prices and pair in next_prices:
-                    portfolio_value *= 1.0 + old_weight * (
-                        next_prices[pair] / prices[pair] - 1.0
-                    )
-
+        # Rebalance at the current snapshot, then hold until the next one.
         if i % cfg.rebalance_every == 0:
-            latest = current.replace([np.inf, -np.inf], np.nan).dropna(
+            latest = current.replace([float("inf"), float("-inf")], pd.NA).dropna(
                 subset=[
                     "last_price",
                     "risk_adjusted_momentum",
@@ -146,38 +121,49 @@ def run_paper_backtest(df: pd.DataFrame, cfg: PaperConfig):
             for pair in all_pairs:
                 old = positions.get(pair, 0.0)
                 new = targets.get(pair, 0.0)
-                turnover += abs(new - old)
+                change = abs(new - old)
+                turnover += change
 
-                if abs(new - old) > 1e-12:
+                if change > 1e-12:
                     trade_rows.append(
                         {
                             "timestamp": timestamp,
                             "pair": pair,
                             "old_weight": old,
                             "new_weight": new,
-                            "turnover": abs(new - old),
+                            "turnover": change,
                         }
                     )
 
             cost = turnover * (cfg.fee_bps + cfg.slippage_bps) / 10_000.0
-            portfolio_value *= 1.0 - cost
+            equity *= 1.0 - cost
             positions = targets
-            last_targets = targets
+
+        # Apply next-period asset returns to the current portfolio weights.
+        portfolio_return = 0.0
+        for pair, weight in positions.items():
+            if pair in current_prices and pair in next_prices:
+                price = current_prices[pair]
+                if price and price > 0:
+                    asset_return = next_prices[pair] / price - 1.0
+                    portfolio_return += weight * asset_return
+
+        equity *= 1.0 + portfolio_return
 
         equity_rows.append(
             {
-                "timestamp": timestamp,
-                "equity": portfolio_value,
-                "positions": len(last_targets),
+                "timestamp": next_time,
+                "equity": equity,
+                "positions": len(positions),
             }
         )
 
-    equity = pd.DataFrame(equity_rows)
-    metrics = performance_metrics(equity["equity"])
+    equity_df = pd.DataFrame(equity_rows)
+    metrics = performance_metrics(equity_df["equity"])
     metrics["observations"] = len(timestamps)
     metrics["trades"] = len(trade_rows)
 
-    return equity, {
+    return equity_df, {
         **metrics,
         "trade_log": pd.DataFrame(trade_rows),
     }
