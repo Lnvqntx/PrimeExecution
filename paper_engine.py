@@ -8,6 +8,7 @@ import pandas as pd
 
 from features import build_features, load_snapshots
 from strategy_v2 import score_v2
+from strategy_v3 import score_v3
 
 
 @dataclass
@@ -27,6 +28,10 @@ def make_targets(cross: pd.DataFrame, cfg: PaperConfig, strategy: str) -> dict[s
         ranked = score_v2(cross)
         score_col = "v2_score"
         eligible = ranked[ranked[score_col] > cfg.min_score]
+    elif strategy == "v3":
+        ranked = score_v3(cross)
+        score_col = "v3_score"
+        eligible = ranked[ranked[score_col] > cfg.min_score]
     else:
         eligible = cross[
             (cross["risk_adjusted_momentum"] > cfg.min_score)
@@ -39,42 +44,55 @@ def make_targets(cross: pd.DataFrame, cfg: PaperConfig, strategy: str) -> dict[s
 
     selected = eligible.head(cfg.top_n)
     scores = selected[score_col].clip(lower=0.0)
-
     if scores.sum() <= 0:
         return {}
 
     weights = scores / scores.sum() * cfg.gross_exposure
     weights = weights.clip(upper=cfg.max_position_weight)
-
     return dict(zip(selected["pair"], weights))
 
 
-def performance_metrics(equity: pd.Series) -> dict[str, float]:
+def performance_metrics(equity: pd.Series, timestamps=None) -> dict[str, float]:
     if len(equity) < 2:
-        return {"total_return": 0.0, "max_drawdown": 0.0, "sharpe": 0.0, "sortino": 0.0}
+        return {
+            "total_return": 0.0,
+            "max_drawdown": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "calmar": 0.0,
+        }
 
     returns = equity.pct_change().dropna()
     total_return = equity.iloc[-1] / equity.iloc[0] - 1.0
     drawdown = equity / equity.cummax() - 1.0
+    max_drawdown = float(drawdown.min())
 
     mean = returns.mean()
     std = returns.std(ddof=1)
     downside = returns[returns < 0].std(ddof=1)
-
     sharpe = float(mean / std * math.sqrt(len(returns))) if std > 0 else 0.0
     sortino = float(mean / downside * math.sqrt(len(returns))) if downside > 0 else 0.0
 
+    calmar = 0.0
+    if timestamps is not None and len(timestamps) >= 2 and max_drawdown < 0:
+        seconds = max(
+            1.0,
+            (pd.Timestamp(timestamps[-1]) - pd.Timestamp(timestamps[0])).total_seconds(),
+        )
+        years = seconds / (365.0 * 24.0 * 3600.0)
+        annualized_return = (1.0 + total_return) ** (1.0 / max(years, 1e-9)) - 1.0
+        calmar = float(annualized_return / abs(max_drawdown))
+
     return {
         "total_return": float(total_return),
-        "max_drawdown": float(drawdown.min()),
+        "max_drawdown": max_drawdown,
         "sharpe": sharpe,
         "sortino": sortino,
+        "calmar": calmar,
     }
 
 
-def run_paper_backtest(
-    df: pd.DataFrame, cfg: PaperConfig, strategy: str = "v1"
-):
+def run_paper_backtest(df: pd.DataFrame, cfg: PaperConfig, strategy: str = "v1"):
     features = build_features(df)
     timestamps = sorted(features["timestamp"].dropna().unique())
 
@@ -136,7 +154,7 @@ def run_paper_backtest(
         })
 
     equity_df = pd.DataFrame(equity_rows)
-    metrics = performance_metrics(equity_df["equity"])
+    metrics = performance_metrics(equity_df["equity"], equity_df["timestamp"])
     metrics["observations"] = len(timestamps)
     metrics["trades"] = len(trade_rows)
 
@@ -147,7 +165,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="data/ticker_snapshots.csv")
     parser.add_argument("--top", type=int, default=5)
-    parser.add_argument("--strategy", choices=["v1", "v2"], default="v1")
+    parser.add_argument("--strategy", choices=["v1", "v2", "v3"], default="v1")
     args = parser.parse_args()
 
     df = load_snapshots(args.data)
@@ -173,6 +191,7 @@ def main():
     print(f"Max drawdown: {result['max_drawdown']:.2%}")
     print(f"Sharpe-like: {result['sharpe']:.3f}")
     print(f"Sortino-like: {result['sortino']:.3f}")
+    print(f"Calmar-like: {result['calmar']:.3f}")
     print()
     print("PAPER SIMULATION ONLY — NO ORDERS ARE GENERATED.")
 
