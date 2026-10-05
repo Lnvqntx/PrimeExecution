@@ -18,9 +18,9 @@ def main():
     df = load_snapshots(args.data)
     timestamps = sorted(df["timestamp"].dropna().unique())
 
-    print("=" * 86)
+    print("=" * 100)
     print("PRIME EXECUTION — WALK-FORWARD PAPER VALIDATION")
-    print("=" * 86)
+    print("=" * 100)
 
     minimum = WARMUP + TEST_SIZE
     if len(timestamps) < minimum:
@@ -29,7 +29,7 @@ def main():
         return
 
     cfg = PaperConfig()
-    strategies = ("v1", "v2", "v3")
+    strategies = ("v1", "v2", "v3", "v4")
 
     for strategy in strategies:
         fold_results = []
@@ -43,8 +43,6 @@ def main():
             if equity is None:
                 break
 
-            # Only score the unseen test section after the 61-observation
-            # feature warmup.
             test_equity = equity.tail(TEST_SIZE)
             metrics = performance_metrics(
                 test_equity["equity"], test_equity["timestamp"]
