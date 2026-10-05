@@ -8,72 +8,117 @@ FEE = 0.001
 SLIPPAGE = 0.0005
 TOP_N = 5
 GROSS = 0.80
-HORIZON = 60
 MAX_SPREAD_BPS = 30.0
+WARMUP = 60
+STEP = 5
+HORIZONS = (15, 30, 60)
 
 
-def main():
-    df = build_features(load_snapshots("data/ticker_snapshots.csv"))
+def evaluate(df: pd.DataFrame, horizon: int):
+    work = df.sort_values(["pair", "timestamp"]).copy()
+    work["future_price"] = work.groupby("pair")["last_price"].shift(-horizon)
+    times = sorted(work["timestamp"].unique())
 
-    # Roostoo collector produces a complete cross-section every ~60 seconds.
-    # Align the future price by snapshot position, not exact timestamp equality.
-    df = df.sort_values(["pair", "timestamp"]).copy()
-    df["future_price"] = df.groupby("pair")["last_price"].shift(-HORIZON)
-
-    times = sorted(df["timestamp"].unique())
     equity = 1.0
     rows = []
-    trades = 0
+    selections = 0
 
-    # Evaluate every 60 snapshots = approximately one hour.
-    for i in range(60, len(times) - HORIZON, HORIZON):
+    # Rolling evaluation: every 5 snapshots (~5 min), not once per horizon.
+    # This gives us substantially more observations without pretending
+    # overlapping paper trades are independent.
+    for i in range(WARMUP, len(times) - horizon, STEP):
         t = times[i]
-        now = df[df["timestamp"] == t].copy()
+        now = work[work["timestamp"] == t].copy()
         x = now.dropna(
             subset=["change_24h", "last_price", "future_price", "spread_bps"]
         )
         x = x[(x["spread_bps"] >= 0) & (x["spread_bps"] <= MAX_SPREAD_BPS)]
 
-        # Long the cross-sectional losers (mean reversion).
-        x = x.sort_values("change_24h", ascending=True).head(TOP_N)
         if len(x) < TOP_N:
             continue
+
+        # Cross-sectional losers: mean-reversion hypothesis.
+        x = x.sort_values("change_24h", ascending=True).head(TOP_N)
 
         gross_ret = GROSS * float(
             (x["future_price"] / x["last_price"] - 1).mean()
         )
-        cost = GROSS * (FEE + SLIPPAGE)
-        equity *= max(0.0, 1.0 + gross_ret - cost)
-        trades += len(x)
-        rows.append((t, equity))
 
-    if len(rows) < 2:
-        print(
-            f"Not enough aligned horizon observations: "
-            f"{len(rows)} periods from {len(times)} snapshots."
-        )
-        return
+        # Approximate round-trip trading cost for paper validation.
+        cost = GROSS * 2.0 * (FEE + SLIPPAGE)
+        net_ret = gross_ret - cost
 
-    e = pd.DataFrame(rows, columns=["timestamp", "equity"])
-    r = e["equity"].pct_change().dropna()
-    dd = e["equity"] / e["equity"].cummax() - 1
+        equity *= max(0.0, 1.0 + net_ret)
+        rows.append((t, equity, net_ret))
+        selections += len(x)
+
+    if len(rows) < 3:
+        return None
+
+    e = pd.DataFrame(rows, columns=["timestamp", "equity", "return"])
+    r = e["return"]
+    dd = e["equity"] / e["equity"].cummax() - 1.0
     vol = r.std()
     downside = r[r < 0].std()
+
     sharpe = np.sqrt(len(r)) * r.mean() / vol if vol > 0 else 0.0
     sortino = (
-        np.sqrt(len(r)) * r.mean() / downside if downside > 0 else 0.0
+        np.sqrt(len(r)) * r.mean() / downside
+        if downside > 0
+        else 0.0
     )
 
-    print("=" * 72)
-    print("PRIME EXECUTION — V5B HORIZON-ALIGNED MEAN REVERSION")
-    print("=" * 72)
-    print(f"Signal: 24h losers | hold: {HORIZON} snapshots (~60m) | top {TOP_N}")
-    print(f"Gross: {GROSS:.0%} | fee: {FEE:.2%} | slippage: {SLIPPAGE:.2%}")
-    print(f"Return: {(equity - 1) * 100:+.3f}%")
-    print(f"Max drawdown: {dd.min() * 100:.3f}%")
-    print(f"Sharpe-like: {sharpe:.3f}")
-    print(f"Sortino-like: {sortino:.3f}")
-    print(f"Simulated selections: {trades}")
+    return {
+        "horizon": horizon,
+        "periods": len(r),
+        "return": equity - 1.0,
+        "max_dd": dd.min(),
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "selections": selections,
+    }
+
+
+def main():
+    df = build_features(load_snapshots("data/ticker_snapshots.csv"))
+    snapshots = df["timestamp"].nunique()
+
+    print("=" * 78)
+    print("PRIME EXECUTION — V5B ROLLING MEAN-REVERSION SCAN")
+    print("=" * 78)
+    print(
+        f"Snapshots: {snapshots} | warmup: {WARMUP} | "
+        f"step: {STEP} | top {TOP_N}"
+    )
+    print(
+        f"Signal: cross-sectional 24h losers | "
+        f"spread <= {MAX_SPREAD_BPS:.0f} bps"
+    )
+    print(
+        f"Round-trip cost model: {2*(FEE+SLIPPAGE):.2%} | "
+        f"gross exposure: {GROSS:.0%}"
+    )
+    print()
+    print("Horizon   Periods   Return     MaxDD      Sharpe    Sortino   Selections")
+    print("-" * 78)
+
+    for horizon in HORIZONS:
+        result = evaluate(df, horizon)
+        if result is None:
+            print(f"{horizon:>6}m   insufficient observations")
+            continue
+        print(
+            f"{horizon:>6}m   {result['periods']:>7}   "
+            f"{result['return']:+.3%}   {result['max_dd']:+.3%}   "
+            f"{result['sharpe']:+.3f}   {result['sortino']:+.3f}   "
+            f"{result['selections']:>9}"
+        )
+
+    print()
+    print(
+        "Interpretation: this is a fast research scan, not a production "
+        "backtest. Overlapping horizons mean observations are correlated."
+    )
     print("PAPER SIMULATION ONLY — NO ORDERS ARE GENERATED.")
 
 
