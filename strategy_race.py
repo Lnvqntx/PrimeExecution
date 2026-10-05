@@ -245,12 +245,12 @@ def main():
     print(f"{'Step':>4} {'Strategy':<18} {'Mode':<12} {'Net':>9} {'Gross':>9} {'Cost':>9} {'MaxDD':>9} {'Sharpe':>8} {'Turn':>7} {'Events':>6}")
     print("-" * 100)
     for r in results:
-        print(f"{r[\"step\"]:>4} {r[\"strategy\"]:<18} {r[\"mode\"]:<12} {r[\"return\"]:+8.3%} {r[\"gross_return\"]:+8.3%} {r[\"cost_drag\"]:+8.3%} {r[\"max_dd\"]:+8.3%} {r[\"sharpe\"]:+7.3f} {r[\"turnover\"]:7.3f} {r[\"events\"]:6d}")
+            print("{step:>4} {strategy:<18} {mode:<12} {net:+8.3%} {gross:+8.3%} {cost:+8.3%} {dd:+8.3%} {sharpe:+7.3f} {turn:7.3f} {events:6d}".format(step=r["step"], strategy=r["strategy"], mode=r["mode"], net=r["return"], gross=r["gross_return"], cost=r["cost_drag"], dd=r["max_dd"], sharpe=r["sharpe"], turn=r["turnover"], events=r["events"]))
 
     print("\nTOP 5 BY SHARPE")
     print("-" * 100)
     for r in results[:5]:
-        print(f"{r[\"step\"]:>2}m {r[\"strategy\"]:<18} {r[\"mode\"]:<12} net={r[\"return\"]:+.3%} gross={r[\"gross_return\"]:+.3%} cost={r[\"cost_drag\"]:+.3%} sharpe={r[\"sharpe\"]:+.3f}")
+        print("{step:>2}m {strategy:<18} {mode:<12} net={net:+.3%} gross={gross:+.3%} cost={cost:+.3%} sharpe={sharpe:+.3f}".format(step=r["step"], strategy=r["strategy"], mode=r["mode"], net=r["return"], gross=r["gross_return"], cost=r["cost_drag"], sharpe=r["sharpe"]))
 
     print("\nPAPER SIMULATION ONLY — NO ORDERS ARE GENERATED.")
 
