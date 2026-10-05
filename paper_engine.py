@@ -9,6 +9,7 @@ import pandas as pd
 from features import build_features, load_snapshots
 from strategy_v2 import score_v2
 from strategy_v3 import score_v3
+from strategy_v4 import score_v4
 
 
 @dataclass
@@ -27,18 +28,20 @@ def make_targets(cross: pd.DataFrame, cfg: PaperConfig, strategy: str) -> dict[s
     if strategy == "v2":
         ranked = score_v2(cross)
         score_col = "v2_score"
-        eligible = ranked[ranked[score_col] > cfg.min_score]
     elif strategy == "v3":
         ranked = score_v3(cross)
         score_col = "v3_score"
-        eligible = ranked[ranked[score_col] > cfg.min_score]
+    elif strategy == "v4":
+        ranked = score_v4(cross)
+        score_col = "v4_score"
     else:
-        eligible = cross[
+        ranked = cross[
             (cross["risk_adjusted_momentum"] > cfg.min_score)
             & (cross["spread_bps"] <= 50.0)
         ].sort_values("risk_adjusted_momentum", ascending=False)
         score_col = "risk_adjusted_momentum"
 
+    eligible = ranked[ranked[score_col] > cfg.min_score]
     if eligible.empty:
         return {}
 
@@ -54,13 +57,7 @@ def make_targets(cross: pd.DataFrame, cfg: PaperConfig, strategy: str) -> dict[s
 
 def performance_metrics(equity: pd.Series, timestamps=None) -> dict[str, float]:
     if len(equity) < 2:
-        return {
-            "total_return": 0.0,
-            "max_drawdown": 0.0,
-            "sharpe": 0.0,
-            "sortino": 0.0,
-            "calmar": 0.0,
-        }
+        return {"total_return": 0.0, "max_drawdown": 0.0, "sharpe": 0.0, "sortino": 0.0, "calmar": 0.0}
 
     returns = equity.pct_change().dropna()
     total_return = equity.iloc[-1] / equity.iloc[0] - 1.0
@@ -75,8 +72,6 @@ def performance_metrics(equity: pd.Series, timestamps=None) -> dict[str, float]:
 
     calmar = 0.0
     if timestamps is not None and len(timestamps) >= 2 and max_drawdown < 0:
-        # Series uses a RangeIndex here, so iloc is required for positional
-        # first/last access on pandas 2.x.
         first_time = pd.Timestamp(timestamps.iloc[0])
         last_time = pd.Timestamp(timestamps.iloc[-1])
         seconds = max(1.0, (last_time - first_time).total_seconds())
@@ -148,17 +143,12 @@ def run_paper_backtest(df: pd.DataFrame, cfg: PaperConfig, strategy: str = "v1")
                     portfolio_return += weight * (next_prices[pair] / price - 1.0)
 
         equity *= 1.0 + portfolio_return
-        equity_rows.append({
-            "timestamp": next_time,
-            "equity": equity,
-            "positions": len(positions),
-        })
+        equity_rows.append({"timestamp": next_time, "equity": equity, "positions": len(positions)})
 
     equity_df = pd.DataFrame(equity_rows)
     metrics = performance_metrics(equity_df["equity"], equity_df["timestamp"])
     metrics["observations"] = len(timestamps)
     metrics["trades"] = len(trade_rows)
-
     return equity_df, {**metrics, "trade_log": pd.DataFrame(trade_rows)}
 
 
@@ -166,7 +156,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="data/ticker_snapshots.csv")
     parser.add_argument("--top", type=int, default=5)
-    parser.add_argument("--strategy", choices=["v1", "v2", "v3"], default="v1")
+    parser.add_argument("--strategy", choices=["v1", "v2", "v3", "v4"], default="v1")
     args = parser.parse_args()
 
     df = load_snapshots(args.data)
