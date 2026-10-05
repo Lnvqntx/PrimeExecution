@@ -6,17 +6,17 @@ import pandas as pd
 def score_v2(cross: pd.DataFrame) -> pd.DataFrame:
     out = cross.copy()
 
-    # V2: momentum must agree with the fast/slow trend.
-    trend_confirmation = (out["trend"] > 0).astype(float)
-
-    # Penalize unstable/high-volatility names rather than simply rewarding
-    # raw momentum.  Spread remains a hard execution-quality filter.
-    volatility_penalty = 1.0 / (1.0 + out["vol_60"].clip(lower=0.0))
+    # V2 keeps the V1 risk-adjusted momentum signal, but adds two
+    # cross-sectional filters that materially change the ranking:
+    # 1) positive fast/slow trend confirmation;
+    # 2) relative-volatility penalty, so unusually unstable names rank lower.
+    out["vol_rank"] = out["vol_60"].rank(pct=True, ascending=True)
+    out["trend_strength"] = out["trend"].clip(lower=0.0)
 
     out["v2_score"] = (
         out["risk_adjusted_momentum"]
-        * (0.5 + 0.5 * trend_confirmation)
-        * volatility_penalty
+        * (1.0 + 0.50 * out["trend_strength"].rank(pct=True))
+        * (1.10 - 0.60 * out["vol_rank"])
     )
 
     out = out[
