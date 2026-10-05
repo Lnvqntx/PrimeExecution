@@ -92,6 +92,29 @@ def select_weights(x, strategy, side_mode):
 def run_strategy(df, strategy, side_mode):
     work = df.sort_values(["timestamp", "pair"]).copy()
 
+    # Keep this race self-contained: older feature files may not expose
+    # every return horizon used by the portfolio signals.
+    grouped = work.groupby("pair")["last_price"]
+    for periods, name in ((15, "ret_15"), (30, "ret_30"), (60, "ret_60")):
+        if name not in work.columns:
+            work[name] = grouped.pct_change(periods)
+
+    if "trend" not in work.columns:
+        ema_fast = grouped.transform(
+            lambda s: s.ewm(span=15, adjust=False).mean()
+        )
+        ema_slow = grouped.transform(
+            lambda s: s.ewm(span=60, adjust=False).mean()
+        )
+        work["trend"] = ema_fast / ema_slow - 1.0
+
+    if "spread_bps" not in work.columns:
+        midpoint = (work["bid"] + work["ask"]) / 2.0
+        work["spread_bps"] = (
+            (work["ask"] - work["bid"]) / midpoint * 10_000
+        )
+
+
     # Next-interval return: today's signal acts only on the following snapshot.
     work["next_price"] = work.groupby("pair")["last_price"].shift(-1)
     work["next_ret"] = work["next_price"] / work["last_price"] - 1.0
