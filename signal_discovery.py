@@ -17,6 +17,10 @@ def add_forward_returns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def rank_series(s: pd.Series) -> pd.Series:
+    return s.rank(method="average")
+
+
 def evaluate_feature(df: pd.DataFrame, feature: str, horizon: int) -> dict[str, float]:
     cols = [feature, f"fwd_{horizon}"]
     sample = df[cols].replace([np.inf, -np.inf], np.nan).dropna()
@@ -28,13 +32,23 @@ def evaluate_feature(df: pd.DataFrame, feature: str, horizon: int) -> dict[str, 
         sample[feature], 10, labels=False, duplicates="drop"
     )
 
-    ic = sample[feature].corr(sample[f"fwd_{horizon}"], method="spearman")
-    top = sample.loc[sample["decile"] == sample["decile"].max(), f"fwd_{horizon}"].mean()
-    bottom = sample.loc[sample["decile"] == sample["decile"].min(), f"fwd_{horizon}"].mean()
+    # Spearman IC without scipy: Pearson correlation of ranks.
+    x = rank_series(sample[feature]).to_numpy(dtype=float)
+    y = rank_series(sample[f"fwd_{horizon}"]).to_numpy(dtype=float)
+    x_std = x.std()
+    y_std = y.std()
+    ic = float(np.corrcoef(x, y)[0, 1]) if x_std > 0 and y_std > 0 else np.nan
+
+    top = sample.loc[
+        sample["decile"] == sample["decile"].max(), f"fwd_{horizon}"
+    ].mean()
+    bottom = sample.loc[
+        sample["decile"] == sample["decile"].min(), f"fwd_{horizon}"
+    ].mean()
 
     return {
         "n": len(sample),
-        "ic": float(ic),
+        "ic": ic,
         "top": float(top),
         "bottom": float(bottom),
         "spread": float(top - bottom),
