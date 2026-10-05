@@ -224,7 +224,7 @@ def main():
     print("=" * 100)
     print("PRIME EXECUTION — COST / REBALANCE SCAN")
     print("=" * 100)
-    print(f"Snapshots: {df[\"timestamp\"].nunique()} | warmup: {WARMUP} | gross: {GROSS:.0%}")
+    print(f"Snapshots: {df['timestamp'].nunique()} | warmup: {WARMUP} | gross: {GROSS:.0%}")
     print("Testing rebalance speeds before selecting a production candidate.")
     print("Fee: 0.10% | slippage: 0.05% per unit turnover.")
     print()
@@ -242,7 +242,7 @@ def main():
         return
 
     results.sort(key=lambda r: (r["sharpe"], r["return"]), reverse=True)
-    print(f"{\"Step\":>4} {\"Strategy\":<18} {\"Mode\":<12} {\"Net\":>9} {\"Gross\":>9} {\"Cost\":>9} {\"MaxDD\":>9} {\"Sharpe\":>8} {\"Turn\":>7} {\"Events\":>6}")
+    print(f"{'Step':>4} {'Strategy':<18} {'Mode':<12} {'Net':>9} {'Gross':>9} {'Cost':>9} {'MaxDD':>9} {'Sharpe':>8} {'Turn':>7} {'Events':>6}")
     print("-" * 100)
     for r in results:
         print(f"{r[\"step\"]:>4} {r[\"strategy\"]:<18} {r[\"mode\"]:<12} {r[\"return\"]:+8.3%} {r[\"gross_return\"]:+8.3%} {r[\"cost_drag\"]:+8.3%} {r[\"max_dd\"]:+8.3%} {r[\"sharpe\"]:+7.3f} {r[\"turnover\"]:7.3f} {r[\"events\"]:6d}")
