@@ -89,7 +89,7 @@ def select_weights(x, strategy, side_mode):
     return weights
 
 
-def run_strategy(df, strategy, side_mode):
+def run_strategy(df, strategy, side_mode, step=15, cost_per_turnover=COST_PER_TURNOVER):
     work = df.sort_values(["timestamp", "pair"]).copy()
 
     # Keep this race self-contained: older feature files may not expose
@@ -125,10 +125,12 @@ def run_strategy(df, strategy, side_mode):
     period_returns = []
     turnovers = []
     trade_events = 0
+    gross_total = 0.0
+    cost_total = 0.0
 
-    for i in range(WARMUP, len(times) - 1, STEP):
+    for i in range(WARMUP, len(times) - 1, step):
         t = times[i]
-        next_t = times[min(i + STEP, len(times) - 1)]
+        next_t = times[min(i + step, len(times) - 1)]
 
         x = work[work["timestamp"] == t].copy()
         future = work[work["timestamp"] == next_t][["pair", "last_price"]]
@@ -172,7 +174,9 @@ def run_strategy(df, strategy, side_mode):
             )
         )
 
-        trading_cost = COST_PER_TURNOVER * turnover
+        trading_cost = cost_per_turnover * turnover
+        gross_total += gross_ret
+        cost_total += trading_cost
         net_ret = gross_ret - trading_cost
         equity *= max(0.0, 1.0 + net_ret)
 
@@ -207,6 +211,9 @@ def run_strategy(df, strategy, side_mode):
         "sharpe": sharpe,
         "sortino": sortino,
         "turnover": float(np.mean(turnovers)),
+        "gross_return": float(gross_total),
+        "cost_drag": float(cost_total),
+        "step": step,
         "events": trade_events,
         "periods": len(r),
     }
@@ -214,65 +221,38 @@ def run_strategy(df, strategy, side_mode):
 
 def main():
     df = build_features(load_snapshots("data/ticker_snapshots.csv"))
-    print("=" * 88)
-    print("PRIME EXECUTION — PORTFOLIO STRATEGY RACE")
-    print("=" * 88)
-    print(
-        f"Snapshots: {df['timestamp'].nunique()} | warmup: {WARMUP} | "
-        f"rebalance step: {STEP}m | gross: {GROSS:.0%}"
-    )
-    print(
-        f"Fee: {FEE:.2%} | slippage: {SLIPPAGE:.2%} | "
-        f"spread cap: {MAX_SPREAD_BPS:.0f} bps"
-    )
-    print("Signal at t -> return from t to t+5m. No look-ahead.")
+    print("=" * 100)
+    print("PRIME EXECUTION — COST / REBALANCE SCAN")
+    print("=" * 100)
+    print(f"Snapshots: {df[\"timestamp\"].nunique()} | warmup: {WARMUP} | gross: {GROSS:.0%}")
+    print("Testing rebalance speeds before selecting a production candidate.")
+    print("Fee: 0.10% | slippage: 0.05% per unit turnover.")
     print()
 
     results = []
-    for strategy in (
-        "momentum",
-        "mean_reversion",
-        "trend",
-        "hybrid",
-    ):
-        for mode in ("long_only", "long_short"):
-            result = run_strategy(df, strategy, mode)
-            if result:
-                results.append(result)
+    for step in (5, 15, 30, 60):
+        for strategy in ("momentum", "mean_reversion", "trend", "hybrid"):
+            for mode in ("long_only", "long_short"):
+                result = run_strategy(df, strategy, mode, step=step, cost_per_turnover=COST_PER_TURNOVER)
+                if result:
+                    results.append(result)
 
     if not results:
         print("Not enough observations.")
         return
 
     results.sort(key=lambda r: (r["sharpe"], r["return"]), reverse=True)
-
-    print(
-        f"{'Strategy':<18} {'Mode':<12} {'Return':>9} "
-        f"{'MaxDD':>9} {'Sharpe':>9} {'Sortino':>9} "
-        f"{'AvgTurn':>9} {'Events':>7}"
-    )
-    print("-" * 88)
-
+    print(f"{\"Step\":>4} {\"Strategy\":<18} {\"Mode\":<12} {\"Net\":>9} {\"Gross\":>9} {\"Cost\":>9} {\"MaxDD\":>9} {\"Sharpe\":>8} {\"Turn\":>7} {\"Events\":>6}")
+    print("-" * 100)
     for r in results:
-        print(
-            f"{r['strategy']:<18} {r['mode']:<12} "
-            f"{r['return']:+8.3%} {r['max_dd']:+8.3%} "
-            f"{r['sharpe']:+8.3f} {r['sortino']:+8.3f} "
-            f"{r['turnover']:8.3f} {r['events']:7d}"
-        )
+        print(f"{r[\"step\"]:>4} {r[\"strategy\"]:<18} {r[\"mode\"]:<12} {r[\"return\"]:+8.3%} {r[\"gross_return\"]:+8.3%} {r[\"cost_drag\"]:+8.3%} {r[\"max_dd\"]:+8.3%} {r[\"sharpe\"]:+7.3f} {r[\"turnover\"]:7.3f} {r[\"events\"]:6d}")
 
-    best = results[0]
-    print()
-    print(
-        f"CURRENT RESEARCH LEADER: {best['strategy']} / {best['mode']} "
-        f"(Sharpe {best['sharpe']:+.3f}, return {best['return']:+.3%})"
-    )
-    print(
-        "IMPORTANT: this is a short live-data sample. It is a ranking "
-        "diagnostic, not evidence of profitability."
-    )
-    print("PAPER SIMULATION ONLY — NO ORDERS ARE GENERATED.")
+    print("\nTOP 5 BY SHARPE")
+    print("-" * 100)
+    for r in results[:5]:
+        print(f"{r[\"step\"]:>2}m {r[\"strategy\"]:<18} {r[\"mode\"]:<12} net={r[\"return\"]:+.3%} gross={r[\"gross_return\"]:+.3%} cost={r[\"cost_drag\"]:+.3%} sharpe={r[\"sharpe\"]:+.3f}")
 
+    print("\nPAPER SIMULATION ONLY — NO ORDERS ARE GENERATED.")
 
 if __name__ == "__main__":
     main()
