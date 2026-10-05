@@ -7,12 +7,12 @@ from features import load_snapshots
 def main():
     df = load_snapshots("data/ticker_snapshots.csv")
 
-    print("=" * 86)
-    print("PRIME EXECUTION — V1 / V2 / V3 PAPER COMPARISON")
-    print("=" * 86)
+    print("=" * 100)
+    print("PRIME EXECUTION — V1 / V2 / V3 / V4 PAPER COMPARISON")
+    print("=" * 100)
 
     results = {}
-    for strategy in ("v1", "v2", "v3"):
+    for strategy in ("v1", "v2", "v3", "v4"):
         _, result = run_paper_backtest(df, PaperConfig(), strategy)
         if "error" in result:
             print(result["error"])
@@ -21,8 +21,8 @@ def main():
         results[strategy] = result
 
     print()
-    print(f"{'Metric':<20} {'V1':>12} {'V2':>12} {'V3':>12}")
-    print("-" * 60)
+    print(f"{'Metric':<20} {'V1':>12} {'V2':>12} {'V3':>12} {'V4':>12}")
+    print("-" * 72)
 
     for key, formatter in (
         ("total_return", lambda x: f"{x:.2%}"),
@@ -36,10 +36,11 @@ def main():
             f"{formatter(results['v1'][key]):>12}"
             f"{formatter(results['v2'][key]):>12}"
             f"{formatter(results['v3'][key]):>12}"
+            f"{formatter(results['v4'][key]):>12}"
         )
 
     print()
-    for strategy in ("v1", "v2", "v3"):
+    for strategy in ("v1", "v2", "v3", "v4"):
         print(f"{strategy.upper()} simulated trades: {results[strategy]['trades']}")
 
     print()
