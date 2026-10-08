@@ -1,0 +1,125 @@
+{
+ "rule": "top 30 USDT pairs by median daily quote volume over 2024-07..2024-09 (pre-window), excluding stablecoins/wrapped/leveraged tokens",
+ "pairs": [
+  {
+   "symbol": "BTCUSDT",
+   "median_quote_volume_usd": 1614654900.0
+  },
+  {
+   "symbol": "ETHUSDT",
+   "median_quote_volume_usd": 756718236.0
+  },
+  {
+   "symbol": "SOLUSDT",
+   "median_quote_volume_usd": 481085524.0
+  },
+  {
+   "symbol": "PEPEUSDT",
+   "median_quote_volume_usd": 230672308.0
+  },
+  {
+   "symbol": "XRPUSDT",
+   "median_quote_volume_usd": 148824061.0
+  },
+  {
+   "symbol": "WIFUSDT",
+   "median_quote_volume_usd": 142599414.0
+  },
+  {
+   "symbol": "BNBUSDT",
+   "median_quote_volume_usd": 126474839.0
+  },
+  {
+   "symbol": "1000SATSUSDT",
+   "median_quote_volume_usd": 79241465.0
+  },
+  {
+   "symbol": "DOGEUSDT",
+   "median_quote_volume_usd": 72128436.0
+  },
+  {
+   "symbol": "NOTUSDT",
+   "median_quote_volume_usd": 59837915.0
+  },
+  {
+   "symbol": "SUIUSDT",
+   "median_quote_volume_usd": 51249887.0
+  },
+  {
+   "symbol": "BOMEUSDT",
+   "median_quote_volume_usd": 49944369.0
+  },
+  {
+   "symbol": "FETUSDT",
+   "median_quote_volume_usd": 47702510.0
+  },
+  {
+   "symbol": "FLOKIUSDT",
+   "median_quote_volume_usd": 46002570.0
+  },
+  {
+   "symbol": "AVAXUSDT",
+   "median_quote_volume_usd": 45713746.0
+  },
+  {
+   "symbol": "BONKUSDT",
+   "median_quote_volume_usd": 41528407.0
+  },
+  {
+   "symbol": "NEARUSDT",
+   "median_quote_volume_usd": 41523603.0
+  },
+  {
+   "symbol": "RUNEUSDT",
+   "median_quote_volume_usd": 40337655.0
+  },
+  {
+   "symbol": "ORDIUSDT",
+   "median_quote_volume_usd": 39426553.0
+  },
+  {
+   "symbol": "TRXUSDT",
+   "median_quote_volume_usd": 38484811.0
+  },
+  {
+   "symbol": "PEOPLEUSDT",
+   "median_quote_volume_usd": 38209637.0
+  },
+  {
+   "symbol": "WLDUSDT",
+   "median_quote_volume_usd": 36560653.0
+  },
+  {
+   "symbol": "SHIBUSDT",
+   "median_quote_volume_usd": 34229391.0
+  },
+  {
+   "symbol": "ARBUSDT",
+   "median_quote_volume_usd": 32471937.0
+  },
+  {
+   "symbol": "ZROUSDT",
+   "median_quote_volume_usd": 31913755.0
+  },
+  {
+   "symbol": "FTMUSDT",
+   "median_quote_volume_usd": 29726591.0
+  },
+  {
+   "symbol": "ADAUSDT",
+   "median_quote_volume_usd": 29602545.0
+  },
+  {
+   "symbol": "TIAUSDT",
+   "median_quote_volume_usd": 26261267.0
+  },
+  {
+   "symbol": "AAVEUSDT",
+   "median_quote_volume_usd": 25625097.0
+  },
+  {
+   "symbol": "IOUSDT",
+   "median_quote_volume_usd": 24484688.0
+  }
+ ]
+}

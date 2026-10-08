@@ -25,3 +25,6 @@ logs/*.log
 
 # Bot runtime output
 logs/
+
+# Research data (downloaded, never committed)
+research/data/
