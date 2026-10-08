@@ -1,0 +1,4 @@
+# Research only (runs in cloud dev sessions, NOT on EC2)
+-r requirements-dev.txt
+pandas>=2.2,<3
+numpy>=2.0,<3
