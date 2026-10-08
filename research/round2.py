@@ -180,7 +180,7 @@ def log(res: dict) -> None:
     ls, ls2, lsb = res["1x"]["long_short"], res["2x"]["long_short"], res["1x_borrow"]["long_short"]
     ok = all(ls["gates"].values()) and all(ls2["gates"].values())
     lines.append({**base, "idea": "round 2: long Phase 0 basket / short 10 weakest by trailing return, collateral-sized",
-                  "rationale": "research only; live bot is spot long-only (CLAUDE.md rule 7) and Roostoo has no shorting",
+                  "rationale": "research only; live bot is spot long-only (CLAUDE.md rule 7); Roostoo supports shorts (/v6/short_open), rule 7 is our own",
                   "data": DATA, "params_tried": len(ls["grid"]) + len(ls["sensitivity"]), "grid": ls["grid"],
                   "most_chosen": ls["most_chosen"],
                   "costs": "0.1% fee/side + half-spread 2/5/10 bps; borrow 0 (stress 10%/yr reported separately)",
@@ -190,7 +190,7 @@ def log(res: dict) -> None:
                   "sensitivity": [{"params": x["params"], "score": x["oos_period"]["score"]} for x in ls["sensitivity"]],
                   "grid_scores_oos": [{"params": x["params"], "score": x["oos_period"]["score"]} for x in ls["grid_results"]],
                   "gates": ls["gates"], "gates_2x_costs": ls2["gates"],
-                  "verdict": "not_promoted (passes gates; shorting not allowed live)" if ok else "rejected"})
+                  "verdict": "not_promoted (passes gates; live bot spot long-only by CLAUDE.md rule 7)" if ok else "rejected"})
     for name in res["1x"]["benchmarks"]:
         lines.append({**base, "idea": f"round 2 benchmark re-run: {name}", "rationale": "reference only; should reproduce round 1",
                       "data": DATA, "params_tried": 0, "metrics": res["1x"]["benchmarks"][name],
