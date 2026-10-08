@@ -22,3 +22,6 @@ logs/*.log
 .DS_Store
 .vscode/
 .idea/
+
+# Bot runtime output
+logs/
