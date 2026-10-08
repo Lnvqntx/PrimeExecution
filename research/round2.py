@@ -1,0 +1,220 @@
+"""Round 2 (research only; nothing here is promoted or touches prime/).
+
+    python -m research.round2 [--log]
+
+Same data, universe, costs and walk-forward protocol as research/run.py (round 1):
+  1. Phase 0 equal-weight basket at gross 0.2 / 0.3 / 0.5 / 0.8 (fixed, no selection).
+  2. Long/short: long the Phase 0 basket, short the 10 weakest names by trailing return,
+     collateral-sized (gross <= 1, each short fully cash-backed), lookback picked by the
+     monthly walk-forward from {14, 28, 56}. 0.1% fee per side + the round-1 half-spread
+     tiers; borrow fee 0 in the base case, 10%/yr as a stress.
+  3. Benchmarks (re-run; must reproduce round 1 exactly).
+Every run is reported at 1x and 2x costs.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from collections import Counter
+from datetime import date
+
+import numpy as np
+import pandas as pd
+
+from .backtest import Costs, deflated_sharpe_prob, metrics
+from .run import (FIRST_TEST_MONTH, GATES, PNL_START, RESULTS, TRIALS, git_rev, load, next_id,
+                  per_period_sharpe, perturbations, run_fixed, walk_forward)
+from .strategies import BENCHMARKS, LONG_SHORT, PHASE0_GROSS, phase0_basket
+
+OUT = RESULTS / "round2"
+BORROW_STRESS = 0.10
+DATA = ("Binance spot 1d klines, top-30 USDT pairs (universe.json); OOS 2025-01..2026-09 (21 monthly folds), "
+        "training from 2024-10, warm-up 2024-07..09")
+
+
+def monthly(r: pd.Series) -> list[float]:
+    return [float((1 + g).prod() - 1) for _, g in r.groupby(r.index.to_period("M"))]
+
+
+def summarise(sim: pd.DataFrame) -> dict:
+    m = metrics(sim["net"])
+    months = monthly(sim["net"])
+    m["folds_positive"] = round(sum(x > 0 for x in months) / len(months), 4)
+    m["avg_daily_turnover"] = round(float(sim["turnover"].mean()), 4)
+    m["cost_drag_annual"] = round(float(sim["cost"].mean() * 365), 4)
+    return m
+
+
+def evaluate(cost_mult: float, borrow: float = 0.0) -> dict:
+    close, volume, hs = load()
+    costs = Costs(half_spread=hs, mult=cost_mult, borrow_annual=borrow)
+    oos = FIRST_TEST_MONTH.start_time
+    pre = oos - pd.Timedelta(days=1)
+    out = {"cost_mult": cost_mult, "borrow_annual": borrow, "phase0_gross": {}, "benchmarks": {}}
+
+    for g in PHASE0_GROSS:
+        sim = run_fixed(close, volume, phase0_basket, {"gross": g}, costs, pre)
+        out["phase0_gross"][f"{g:.1f}"] = summarise(sim)
+
+    fn, grid = LONG_SHORT
+    sim, folds, per_cfg = walk_forward(close, volume, fn, grid, costs, allow_short=True)
+    mode = json.loads(Counter(json.dumps(f["chosen"], sort_keys=True) for f in folds).most_common(1)[0][0])
+    sens = []
+    for q in perturbations(mode, GATES["perturb"]):
+        s = run_fixed(close, volume, fn, q, costs, PNL_START - pd.Timedelta(days=1), allow_short=True)
+        sens.append({"params": q, "oos_period": metrics(s["net"].loc[oos:])})
+    grid_res = [{"params": g, "oos_period": metrics(s["net"].loc[oos:]),
+                 "liquidations": int(s["liquidations"].loc[oos:].sum())} for g, s in zip(grid, per_cfg)]
+    out["long_short"] = {
+        "grid": grid, "oos": summarise(sim), "oos_gross": metrics(sim["gross"]),
+        "liquidations": int(sim["liquidations"].sum()), "folds": folds, "most_chosen": mode,
+        "grid_results": grid_res, "sensitivity": sens,
+        "_returns": sim["net"], "_trial_sharpes": [x["oos_period"]["sharpe"] / math.sqrt(365) for x in grid_res + sens],
+    }
+
+    for name, bfn in BENCHMARKS.items():
+        out["benchmarks"][name] = summarise(run_fixed(close, volume, bfn, {}, costs, pre))
+    return out
+
+
+def deflate(ls: dict) -> None:
+    """Deflated Sharpe over every configuration tried so far (round 1 + round 2)."""
+    r1 = json.loads((RESULTS / "summary.json").read_text())["1x"]["candidates"]
+    sharpes = [x["oos_period"]["sharpe"] / math.sqrt(365) for c in r1.values() for x in c["grid_results"] + c["sensitivity"]]
+    sharpes += ls.pop("_trial_sharpes")
+    r = ls.pop("_returns")
+    ls["n_trials_deflated"] = len(sharpes)
+    ls["dsr_prob"] = round(deflated_sharpe_prob(r, len(sharpes), sharpes), 4)
+    o = ls["oos"]
+    ls["gates"] = {k: bool(v) for k, v in {
+        "positive_after_costs": o["total_return"] > 0 and o["score"] > 0,
+        "folds_positive_ge_65pct": o["folds_positive"] >= GATES["min_folds_positive"],
+        "stable_pm30pct": o["score"] > 0 and all(s["oos_period"]["score"] > 0 for s in ls["sensitivity"]),
+        "deflated_sharpe_ge_95pct": ls["dsr_prob"] >= GATES["min_dsr_prob"],
+    }.items()}
+
+
+def render(res: dict) -> str:
+    cols = "| run | return | Sharpe | Sortino | Calmar | max DD | score | months + |"
+    sep = "|---|---|---|---|---|---|---|---|"
+
+    def row(name, o):
+        return (f"| {name} | {o['total_return']:.1%} | {o['sharpe']:.2f} | {o['sortino']:.2f} | {o['calmar']:.2f} | "
+                f"{o['maxdd']:.1%} | {o['score']:.3f} | {o['folds_positive']:.0%} |")
+    out = ["# Round 2 results", "",
+           "Generated by `python -m research.round2`. Same data and protocol as round 1: 21 out-of-sample months "
+           "2025-01..2026-09, weekly rebalance, 0.1% fee per side + half-spread 2/5/10 bps by liquidity tier. "
+           "Score = 0.4*Sortino + 0.3*Sharpe + 0.3*Calmar. **Nothing is promoted.**", ""]
+    for key, title in (("1x", "1x costs"), ("2x", "2x costs"), ("1x_borrow", f"1x costs + {BORROW_STRESS:.0%}/yr short borrow")):
+        r = res[key]
+        out += [f"## {title}", "", cols, sep]
+        if key != "1x_borrow":
+            out += [row(f"Phase 0 basket, gross {g}", o) for g, o in r["phase0_gross"].items()]
+        out.append(row("Long/short (walk-forward)", r["long_short"]["oos"]))
+        if key != "1x_borrow":
+            out += [row(f"*{n}* (benchmark)", o) for n, o in r["benchmarks"].items()]
+        out.append("")
+    ls = res["1x"]["long_short"]
+    out += ["## Long/short detail (1x costs)", "",
+            f"Gross score {ls['oos_gross']['score']:.3f}; cost drag {ls['oos']['cost_drag_annual']:.1%}/yr; "
+            f"liquidations (short at 2x entry) {ls['liquidations']}. Most chosen `{json.dumps(ls['most_chosen'])}`. "
+            f"Deflated Sharpe P {ls['dsr_prob']:.2f} over {ls['n_trials_deflated']} configurations (rounds 1+2). Gates: "
+            + ", ".join(f"{k} {'PASS' if v else 'fail'}" for k, v in ls["gates"].items()) + ".", "",
+            "| fixed params | OOS score | OOS return | max DD |", "|---|---|---|---|"]
+    for x in ls["grid_results"]:
+        o = x["oos_period"]
+        out.append(f"| `{json.dumps(x['params'])}` | {o['score']:.3f} | {o['total_return']:.1%} | {o['maxdd']:.1%} |")
+    for x in ls["sensitivity"]:
+        o = x["oos_period"]
+        out.append(f"| `{json.dumps(x['params'])}` (+/-30%) | {o['score']:.3f} | {o['total_return']:.1%} | {o['maxdd']:.1%} |")
+    out += ["", "| month | chosen | OOS return |", "|---|---|---|"]
+    out += [f"| {f['month']} | `{json.dumps(f['chosen'])}` | {f['oos_return']:.1%} |" for f in ls["folds"]]
+    return "\n".join(out) + "\n"
+
+
+ROUND1_DEBUG_NOTE = {
+    "idea": "NOTE: unlogged round-1 debug run (retroactive entry)",
+    "rationale": "Smoke test of research/run.py on a first-download panel that was missing whole months for 22 of "
+                 "30 pairs (transient 404s from the download endpoint). Missing days made pairs look delisted, so the "
+                 "numbers are invalid. Data was re-downloaded cleanly before the logged runs exp-001..006.",
+    "metrics_printed_1x": {"ts_trend": -0.755, "xs_momentum": -0.487, "vol_basket": -0.193,
+                           "btc_hold": 0.352, "equal_weight": -0.514, "phase0_proxy": -0.375},
+    "metrics_printed_2x": {"ts_trend": -0.759, "xs_momentum": -0.661, "vol_basket": -0.204,
+                           "btc_hold": 0.340, "equal_weight": -0.523, "phase0_proxy": -0.403},
+    "metrics_note": "composite scores as printed; invalid data",
+    "verdict": "void (incomplete data)",
+}
+ROUND1_DUP_NOTE = {
+    "idea": "NOTE: unlogged round-1 run on the final data (retroactive entry)",
+    "rationale": "python -m research.run without --log, executed once on the final panel to check the report "
+                 "renderer, immediately before the logged run. The code is deterministic and the printed numbers were "
+                 "identical to exp-001..exp-006; no decision was made from it.",
+    "duplicate_of": ["exp-001", "exp-002", "exp-003", "exp-004", "exp-005", "exp-006"],
+    "verdict": "duplicate (identical to exp-001..006)",
+}
+ROUND2_CRASH_NOTE = {
+    "idea": "NOTE: first round-2 attempt crashed (retroactive entry)",
+    "rationale": "python -m research.round2 --log computed all round-2 runs, then failed writing summary.json "
+                 "(numpy bool not JSON-serialisable) before printing or logging anything. Fixed by casting gate "
+                 "results to bool; the code and data were otherwise unchanged and the rerun below is the first "
+                 "with visible results.",
+    "verdict": "void (crashed, no output seen)",
+}
+
+
+def log(res: dict) -> None:
+    n = next_id()
+    base = {"date": str(date.today()), "code_rev": git_rev()}
+    lines = []
+    if n == 7:  # retroactive notes go in once, right after round 1's entries
+        lines += [{**base, **ROUND1_DEBUG_NOTE, "params_tried": 0}, {**base, **ROUND1_DUP_NOTE, "params_tried": 0},
+                  {**base, **ROUND2_CRASH_NOTE, "params_tried": 0}]
+    for g in PHASE0_GROSS:
+        k = f"{g:.1f}"
+        lines.append({**base, "idea": f"round 2: Phase 0 equal-weight basket, gross {k} (fixed, no selection)",
+                      "rationale": "exposure sweep of the live baseline; research/round2.py", "data": DATA,
+                      "params_tried": 1, "params": {"gross": g},
+                      "metrics": res["1x"]["phase0_gross"][k], "metrics_2x_costs": res["2x"]["phase0_gross"][k],
+                      "verdict": "reported only (baseline sweep; not a promotion candidate)"})
+    ls, ls2, lsb = res["1x"]["long_short"], res["2x"]["long_short"], res["1x_borrow"]["long_short"]
+    ok = all(ls["gates"].values()) and all(ls2["gates"].values())
+    lines.append({**base, "idea": "round 2: long Phase 0 basket / short 10 weakest by trailing return, collateral-sized",
+                  "rationale": "research only; live bot is spot long-only (CLAUDE.md rule 7) and Roostoo has no shorting",
+                  "data": DATA, "params_tried": len(ls["grid"]) + len(ls["sensitivity"]), "grid": ls["grid"],
+                  "most_chosen": ls["most_chosen"],
+                  "costs": "0.1% fee/side + half-spread 2/5/10 bps; borrow 0 (stress 10%/yr reported separately)",
+                  "metrics": ls["oos"], "metrics_2x_costs": ls2["oos"], "metrics_borrow_10pct": lsb["oos"],
+                  "liquidations": ls["liquidations"], "dsr_prob": ls["dsr_prob"],
+                  "n_trials_deflated": ls["n_trials_deflated"],
+                  "sensitivity": [{"params": x["params"], "score": x["oos_period"]["score"]} for x in ls["sensitivity"]],
+                  "grid_scores_oos": [{"params": x["params"], "score": x["oos_period"]["score"]} for x in ls["grid_results"]],
+                  "gates": ls["gates"], "gates_2x_costs": ls2["gates"],
+                  "verdict": "not_promoted (passes gates; shorting not allowed live)" if ok else "rejected"})
+    for name in res["1x"]["benchmarks"]:
+        lines.append({**base, "idea": f"round 2 benchmark re-run: {name}", "rationale": "reference only; should reproduce round 1",
+                      "data": DATA, "params_tried": 0, "metrics": res["1x"]["benchmarks"][name],
+                      "metrics_2x_costs": res["2x"]["benchmarks"][name], "verdict": "benchmark"})
+    with TRIALS.open("a") as f:
+        for i, l in enumerate(lines):
+            f.write(json.dumps({"id": f"exp-{n + i:03d}", **l}) + "\n")
+    print(f"appended {len(lines)} trials (exp-{n:03d}..exp-{n + len(lines) - 1:03d})")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--log", action="store_true")
+    args = ap.parse_args()
+    res = {"1x": evaluate(1.0), "2x": evaluate(2.0), "1x_borrow": evaluate(1.0, BORROW_STRESS)}
+    for r in res.values():
+        deflate(r["long_short"])
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "summary.json").write_text(json.dumps(res, indent=1) + "\n")
+    (OUT / "RESULTS.md").write_text(render(res))
+    print(render(res))
+    if args.log:
+        log(res)
+
+
+if __name__ == "__main__":
+    main()

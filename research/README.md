@@ -20,4 +20,8 @@ python -m research.run --log     # same, and append the runs to experiments/tria
 - `run.py`: the protocol (monthly expanding-window walk-forward, 21 OOS folds, 1x and 2x costs, the
   promotion gates from `experiments/README.md`).
 
+- `round2.py`: round 2. Phase 0 basket gross sweep (0.2/0.3/0.5/0.8), a collateral-sized long/short
+  (long Phase 0 basket, short the 10 weakest names; research only, since the live bot is spot long-only), and
+  the benchmarks re-run. Results in `results/round2/`. `python -m research.round2 [--log]`.
+
 Running `run.py` reports gate results only. Any promotion into `prime/strategy.py` is a separate, reviewed change.

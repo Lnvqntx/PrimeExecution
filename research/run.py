@@ -60,20 +60,20 @@ def weekly(index: pd.DatetimeIndex) -> pd.Series:
     return pd.Series(index.dayofweek == 0, index=index)
 
 
-def run_fixed(close, volume, fn, params, costs, start):
-    """Fixed-parameter run; returns net daily returns for dates > start."""
+def run_fixed(close, volume, fn, params, costs, start, allow_short=False):
+    """Fixed-parameter run; returns the simulation for dates > start."""
     w = fn(close, volume, **params)
     c = close.loc[start:]
     reb = weekly(c.index)
     reb.iloc[0] = True
-    sim = simulate(c, w.loc[start:], costs, reb)
+    sim = simulate(c, w.loc[start:], costs, reb, allow_short=allow_short)
     return sim.iloc[1:]
 
 
-def walk_forward(close, volume, fn, grid, costs):
+def walk_forward(close, volume, fn, grid, costs, allow_short=False):
     """Returns (OOS sim frame, per-fold choices, per-config full-window sims)."""
     start = PNL_START - pd.Timedelta(days=1)
-    per_cfg = [run_fixed(close, volume, fn, g, costs, start) for g in grid]
+    per_cfg = [run_fixed(close, volume, fn, g, costs, start, allow_short) for g in grid]
     weights = [fn(close, volume, **g) for g in grid]
 
     c = close.loc[FIRST_TEST_MONTH.start_time - pd.Timedelta(days=1):]
@@ -90,7 +90,7 @@ def walk_forward(close, volume, fn, grid, costs):
         reb.loc[train_end] = True
         folds.append({"month": str(month), "chosen": grid[best], "train_score": round(scores[best], 4)})
         month += 1
-    sim = simulate(c, stitched, costs, reb).iloc[1:]
+    sim = simulate(c, stitched, costs, reb, allow_short=allow_short).iloc[1:]
     for f in folds:
         m = sim["net"][sim.index.to_period("M") == pd.Period(f["month"], "M")]
         f["oos_return"] = round(float((1 + m).prod() - 1), 4)

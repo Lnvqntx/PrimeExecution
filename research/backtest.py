@@ -7,6 +7,12 @@ sum_i |w_target_i - w_drifted_i| * (fee + half_spread_i) * cost_mult.
 
 A pair whose data ends (delisting) is sold at its last close: its return is 0 after that
 and its weight is forced to 0 at the next rebalance (and charged as turnover).
+
+Shorts (research only; the live bot is spot long-only, CLAUDE.md rule 7) are opt-in via
+allow_short=True. Collateral sizing: sum(|w|) <= 1, so every unit of short notional is
+backed by a unit of equity held as cash collateral and nothing is leveraged. A short whose
+price reaches 2x its entry price has lost all its collateral and is force-closed
+(liquidated) at that close. Borrow fees, if any, accrue daily on short notional.
 """
 from __future__ import annotations
 
@@ -26,6 +32,7 @@ class Costs:
     half_spread: dict[str, float] | None = None   # per pair, as a fraction; default below
     default_half_spread: float = 0.0005
     mult: float = 1.0                              # 2.0 for the 2x stress test
+    borrow_annual: float = 0.0                     # short borrow fee, fraction of notional per year
 
     def per_side(self, pairs) -> np.ndarray:
         hs = self.half_spread or {}
@@ -33,7 +40,7 @@ class Costs:
 
 
 def simulate(close: pd.DataFrame, weights: pd.DataFrame, costs: Costs,
-             rebalance: pd.Series | None = None) -> pd.DataFrame:
+             rebalance: pd.Series | None = None, allow_short: bool = False) -> pd.DataFrame:
     """close: dates x pairs (NaN where not trading). weights: same shape, target weights
     decided at each date's close (rows with all-NaN mean "no decision"). rebalance: bool
     per date; default every date. Returns per-date gross/cost/net return and turnover,
@@ -44,10 +51,12 @@ def simulate(close: pd.DataFrame, weights: pd.DataFrame, costs: Costs,
     w_tgt = weights.reindex(index=close.index, columns=pairs).to_numpy()
     reb = np.ones(len(close), bool) if rebalance is None else rebalance.reindex(close.index).fillna(False).to_numpy()
     per_side = costs.per_side(pairs)
+    px = close.to_numpy()
 
     n = len(close)
     hold = np.zeros(len(pairs))
-    gross = np.zeros(n); cost = np.zeros(n); turnover = np.zeros(n)
+    entry = np.full(len(pairs), np.nan)  # short entry price, for the liquidation check
+    gross = np.zeros(n); cost = np.zeros(n); turnover = np.zeros(n); liquidations = np.zeros(n, int)
     for t in range(n):
         if t > 0:
             r = np.where(np.isnan(rets[t]), 0.0, rets[t])
@@ -55,22 +64,35 @@ def simulate(close: pd.DataFrame, weights: pd.DataFrame, costs: Costs,
             grown = hold * (1 + r)
             denom = 1 + gross[t]
             hold = grown / denom if denom > 0 else np.zeros_like(hold)
+            cost[t] += costs.borrow_annual * costs.mult / DAYS_PER_YEAR * float(-hold[hold < 0].sum())
         dead = ~alive[t]
+        if allow_short:  # liquidate shorts that have lost their whole collateral
+            liq = (hold < 0) & ~dead & (px[t] >= 2 * entry)
+            if liq.any():
+                trade = np.where(liq, -hold, 0.0)
+                turnover[t] += trade.sum()
+                cost[t] += float(trade @ per_side)
+                liquidations[t] = int(liq.sum())
+                hold = np.where(liq, 0.0, hold)
+                entry = np.where(liq, np.nan, entry)
         if reb[t] and not np.all(np.isnan(w_tgt[t])):
             tgt = np.where(np.isnan(w_tgt[t]) | dead, 0.0, w_tgt[t])
-            tgt = np.clip(tgt, 0.0, None)
-            if tgt.sum() > 1.0:  # no leverage
-                tgt = tgt / tgt.sum()
+            if not allow_short:
+                tgt = np.clip(tgt, 0.0, None)
+            if np.abs(tgt).sum() > 1.0:  # no leverage: gross (longs + collateralised shorts) <= equity
+                tgt = tgt / np.abs(tgt).sum()
             trade = np.abs(tgt - hold)
-            turnover[t] = trade.sum()
-            cost[t] = float(trade @ per_side)
+            turnover[t] += trade.sum()
+            cost[t] += float(trade @ per_side)
+            entry = np.where(tgt < 0, px[t], np.nan)  # resized shorts are re-collateralised
             hold = tgt
-        elif dead.any() and hold[dead].sum() > 0:  # delisted: sold at last close
-            trade = np.where(dead, hold, 0.0)
-            turnover[t] = trade.sum()
-            cost[t] = float(trade @ per_side)
+        elif dead.any() and np.abs(hold[dead]).sum() > 0:  # delisted: closed at last close
+            trade = np.where(dead, np.abs(hold), 0.0)
+            turnover[t] += trade.sum()
+            cost[t] += float(trade @ per_side)
             hold = np.where(dead, 0.0, hold)
-    out = pd.DataFrame({"gross": gross, "cost": cost, "turnover": turnover}, index=close.index)
+    out = pd.DataFrame({"gross": gross, "cost": cost, "turnover": turnover, "liquidations": liquidations},
+                       index=close.index)
     # cost is paid at the close of t, so it reduces the equity carried into t+1
     out["net"] = (1 + out["gross"]) * (1 - out["cost"]) - 1
     return out

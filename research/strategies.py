@@ -74,13 +74,42 @@ def btc_hold(close: pd.DataFrame, volume: pd.DataFrame) -> pd.DataFrame:
     return w
 
 
-def phase0_proxy(close: pd.DataFrame, volume: pd.DataFrame) -> pd.DataFrame:
-    """Rough stand-in for the live Phase 0 basket: 30% gross, equal weight across the 10
-    pairs with the highest trailing 7-day quote volume (spread filter not modelled)."""
+def _top_volume(volume: pd.DataFrame, n: int = 10) -> tuple[pd.DataFrame, pd.Series]:
     vol7 = volume.rolling(7, min_periods=7).mean()
     rank = vol7.rank(axis=1, ascending=False, method="first")
-    valid = vol7.notna().sum(axis=1) >= 10
-    return ((rank <= 10).astype(float) * 0.03).where(valid, axis=0)
+    return rank <= n, vol7.notna().sum(axis=1) >= n
+
+
+def phase0_basket(close: pd.DataFrame, volume: pd.DataFrame, gross: float) -> pd.DataFrame:
+    """Rough stand-in for the live Phase 0 basket: `gross` of equity, equal weight across
+    the 10 pairs with the highest trailing 7-day quote volume (spread filter and the live
+    max_weight cap not modelled)."""
+    top, valid = _top_volume(volume)
+    return (top.astype(float) * gross / 10).where(valid, axis=0)
+
+
+def phase0_proxy(close: pd.DataFrame, volume: pd.DataFrame) -> pd.DataFrame:
+    return phase0_basket(close, volume, gross=0.30)
+
+
+def phase0_long_short(close: pd.DataFrame, volume: pd.DataFrame, lookback: int,
+                      n_short: int = 10, gross: float = 1.0) -> pd.DataFrame:
+    """Round 2, research only (the live bot is spot long-only). Long leg: the Phase 0
+    basket at gross/2. Short leg: the `n_short` pairs with the lowest `lookback`-day return
+    among pairs not in the long leg, equal weight, -gross/2 in total. Collateral sizing:
+    sum(|w|) = gross <= 1, so each short is fully backed by equity held as cash."""
+    top, valid = _top_volume(volume)
+    mom = close / close.shift(lookback) - 1
+    rank = mom.where(~top).rank(axis=1, ascending=True, method="first")
+    short = rank <= n_short
+    valid &= mom.where(~top).notna().sum(axis=1) >= n_short
+    w = top.astype(float) * (gross / 2 / 10) - short.astype(float) * (gross / 2 / n_short)
+    return w.where(valid, axis=0)
 
 
 BENCHMARKS = {"btc_hold": btc_hold, "equal_weight": equal_weight, "phase0_proxy": phase0_proxy}
+
+
+# ---- round 2 (pre-declared 2026-10-08) ----
+PHASE0_GROSS = (0.2, 0.3, 0.5, 0.8)
+LONG_SHORT = (phase0_long_short, [{"lookback": L} for L in (14, 28, 56)])
