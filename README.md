@@ -16,9 +16,10 @@ This is a baseline, not an alpha claim. The reasons for starting here:
   volatility and drawdown small, which is what those ratios reward.
 - **Validity:** the strategy is declared up front and the logs show it executing exactly that.
 
-Candidate signal strategies (trend on liquid majors, cross-sectional momentum/reversal, volatility scaling) are researched
-offline on long Binance history with walk-forward validation. A candidate replaces the baseline only if it passes the
-gates in `experiments/README.md`. Every trial, including the rejected ones, is logged in `experiments/trials.jsonl`.
+Candidate signal strategies (time-series trend, cross-sectional momentum, volatility-scaled basket, and a long/short
+variant) were tested offline on 21 out-of-sample months of Binance history with walk-forward validation. None passed the
+gates in `experiments/README.md`, so none is live. Every trial, including the rejected and retroactively logged ones, is
+in `experiments/trials.jsonl`. The full strategy description and results are in [STRATEGY.md](STRATEGY.md).
 
 ## How a trading cycle works
 
@@ -57,7 +58,8 @@ portfolio is already on target it sends nothing.
 ```
 prime/        live bot: client, market, portfolio, strategy, risk, planner, executor, bot loop, report
 tests/        fake exchange, signature-verifying mock server, unit + end-to-end tests
-experiments/  research trial log
+experiments/  research trial log (trials.jsonl)
+research/     offline walk-forward backtests (not imported by the bot)
 deploy/       systemd installer for EC2
 legacy/       original research scripts, kept for history
 ```
